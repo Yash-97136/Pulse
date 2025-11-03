@@ -1,0 +1,46 @@
+# Global editor/OS
+.DS_Store
+.idea/
+.vscode/
+
+# Common logs
+*.log
+logs/
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Python bytecode anywhere
+__pycache__/
+*.py[cod]
+
+# Node/JS
+node_modules/
+dist/
+.parcel-cache/
+.eslintcache
+
+# Frontend builds
+frontend/**/dist/
+frontend/**/.cache/
+
+# Python envs
+.venv/
+env/
+venv/
+
+# Java/Maven
+target/
+.mvn/wrapper/maven-wrapper.jar
+
+# Docker
+.docker/
+
+# Local env files
+.env
+.env.*
+!.env.example

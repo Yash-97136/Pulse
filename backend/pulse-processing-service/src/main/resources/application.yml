@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: pulse-processing-service
+  profiles:
+    # Default to Redis Streams pipeline for local dev/IntelliJ,
+    # so you don't need to set a profile at runtime.
+    default: redis-pipeline
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: pulse-processing
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
+      auto-offset-reset: earliest
+    properties:
+      schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
+      specific.avro.reader: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+pulse:
+  trends:
+    zset-key: trends:global
+    # Activity ZSET used for time-windowed active keyword KPI
+    activity-zset-key: trends:lastSeen
+  kafka:
+    topics:
+      raw-posts: ${RAW_POSTS_TOPIC:raw_social_posts}   # configurable topic
+    concurrency: ${KAFKA_CONCURRENCY:3}                # configurable concurrency
+  redis:
+    stream:
+      name: ${RAW_POSTS_STREAM:raw_posts}
+      group: ${REDIS_STREAM_GROUP:pulse-processing}
+      consumer: ${REDIS_STREAM_CONSUMER:processor-1}
+  processing:
+    df-ttl-seconds: 86400   # rolling window length (seconds)
+    df-max-ratio: 0.20      # drop tokens appearing in >20% of posts in window
+  maintenance:
+    interval-ms: 60000
+    max-tokens: 100000
+    activity-ttl-seconds: 604800
+
+logging:
+  level:
+    # Keep Spring logs at info to reduce noise
+    org.springframework: info
+    org.apache.kafka: warn
+    org.springframework.data.redis: info
+    # Turn on detailed logs only for our stream consumer
+    com.pulse.processing.consumer: debug
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  prometheus:
+    metrics:
+      export:
+        enabled: true

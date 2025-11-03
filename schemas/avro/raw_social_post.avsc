@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "RawSocialPost",
+  "namespace": "com.pulse.avro",
+  "fields": [
+    { "name": "id", "type": "string" },
+    { "name": "text", "type": "string" },
+    { "name": "timestamp", "type": { "type": "long", "logicalType": "timestamp-millis" } },
+    { "name": "source", "type": ["null", "string"], "default": null },
+    { "name": "lang", "type": ["null", "string"], "default": null }
+  ]
+}

@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply antialiased;
+}
+
+.glass-panel {
+  @apply rounded-3xl border border-white/5 bg-white/5 backdrop-blur-xl shadow-glass;
+}
+
+.text-gradient {
+  @apply bg-gradient-to-r from-accent-cyan via-white to-accent-magenta bg-clip-text text-transparent;
+}

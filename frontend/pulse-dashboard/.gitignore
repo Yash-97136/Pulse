@@ -1,0 +1,17 @@
+# Node project ignores
+node_modules/
+dist/
+build/
+.cache/
+
+# Logs
+*.log
+
+# Env files
+.env
+.env.*
+
+# Editors/OS
+.idea/
+.vscode/
+.DS_Store

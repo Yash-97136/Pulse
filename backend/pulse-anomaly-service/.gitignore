@@ -1,0 +1,23 @@
+/target/
+
+# IDEs and editors
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+.vscode/
+
+# Logs
+logs/
+*.log
+
+# OS cruft
+.DS_Store
+
+# Env/config overrides
+.env
+.env.*
+*.local.properties

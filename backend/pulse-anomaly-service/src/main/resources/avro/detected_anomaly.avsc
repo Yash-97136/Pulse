@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "DetectedAnomaly",
+  "namespace": "com.pulse.avro",
+  "fields": [
+    { "name": "keyword", "type": "string" },
+    { "name": "current_count", "type": "int" },
+    { "name": "average_count", "type": "double" },
+    { "name": "stddev", "type": "double" },
+    { "name": "z_score", "type": "double" },
+    { "name": "timestamp", "type": { "type": "long", "logicalType": "timestamp-millis" } },
+    { "name": "window_start", "type": ["null", { "type": "long", "logicalType": "timestamp-millis" }], "default": null },
+    { "name": "window_end", "type": ["null", { "type": "long", "logicalType": "timestamp-millis" }], "default": null },
+    { "name": "metadata", "type": ["null", { "type": "map", "values": "string" }], "default": null }
+  ]
+}

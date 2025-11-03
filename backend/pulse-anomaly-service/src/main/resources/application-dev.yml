@@ -1,0 +1,12 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+logging:
+  level:
+    com.pulse.anomaly: debug
+
+pulse:
+  scheduler:
+    interval-ms: 2000

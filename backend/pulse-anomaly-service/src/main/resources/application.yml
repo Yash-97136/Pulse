@@ -1,0 +1,67 @@
+spring:
+  application:
+    name: pulse-anomaly-service
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+      properties:
+        enable.idempotence: true
+        acks: all
+    properties:
+      schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/pulse}
+    username: ${DB_USER:pulse}
+    password: ${DB_PASSWORD:pulse}
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate.jdbc.time_zone: UTC
+
+pulse:
+  trends:
+    zset-key: trends:global
+    top-n: ${PULSE_TOP_N:100}
+    last-counts-hash: trends:last_counts
+  anomalies:
+    topic: ${ANOMALY_TOPIC:detected_anomalies}
+    z-threshold: ${Z_THRESHOLD:3.0}
+    history-window: ${HISTORY_WINDOW:360}
+    min-z-step: ${ANOMALY_MIN_Z_STEP:1.0}
+    last-z-ttl-seconds: ${ANOMALY_LAST_Z_TTL_SECONDS:86400}
+    baseline-volume-min: ${ANOMALY_BASELINE_VOLUME_MIN:30}
+    history-ttl-seconds: ${ANOMALY_HISTORY_TTL_SECONDS:172800}
+  scheduler:
+    interval-ms: ${SCHEDULE_INTERVAL_MS:20000}
+    lock-key: anomaly:lock
+    lock-ttl-ms: ${SCHEDULE_LOCK_TTL_MS:30000}
+
+logging:
+  level:
+    org.springframework: info
+    org.springframework.kafka: warn
+    com.pulse.anomaly: info
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  prometheus:
+    metrics:
+      export:
+        enabled: true

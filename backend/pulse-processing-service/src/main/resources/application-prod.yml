@@ -1,0 +1,15 @@
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    consumer:
+      auto-offset-reset: latest
+    properties:
+      schema.registry.url: ${SCHEMA_REGISTRY_URL}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+
+logging:
+  level:
+    com.pulse.processing: info

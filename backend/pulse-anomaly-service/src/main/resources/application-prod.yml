@@ -1,0 +1,17 @@
+# Production-tuned anomaly detection defaults
+pulse:
+  trends:
+    top-n: 200
+  anomalies:
+    z-threshold: 3.0
+    history-window: 360    # 1-hour window at 10s interval
+    min-z-step: 1.0
+    last-z-ttl-seconds: 86400
+    baseline-volume-min: 30
+  scheduler:
+    interval-ms: 10000
+    lock-ttl-ms: 30000
+
+logging:
+  level:
+    com.pulse.anomaly: info
