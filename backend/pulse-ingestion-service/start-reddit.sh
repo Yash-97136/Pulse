@@ -89,7 +89,7 @@ if [ -n "$SUBREDDITS_VAL" ]; then
 fi
 
 # Start
-nohup ./.venv/bin/python reddit_ingest.py "${ARGS[@]}" >> ingest.log 2>&1 &
+nohup ./.venv/bin/python -u reddit_ingest.py "${ARGS[@]}" >> ingest.log 2>&1 &
 echo $! > ingest.pid
 sleep 2
 
