@@ -6,7 +6,7 @@ This directory contains the Reddit ingestion script that feeds the pipeline via 
 
 1. Copy `.env.example` to `.env` and fill in your Reddit API credentials and Redis connection:
 
-   - `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT`
+   - `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` (if the value contains spaces, quote it)
    - `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`
    - Set `SINK=redis`
 
@@ -28,7 +28,8 @@ This directory contains the Reddit ingestion script that feeds the pipeline via 
 ### Notes
 
 - The script auto-creates a local Python virtualenv in `.venv` and installs `requirements.txt`.
-- You can also set `SUBREDDITS`, `RPS`, `BACKFILL_MINUTES` in your `.env` and omit flags.
+- The Python ingestion reads `.env` directly via python-dotenv. The start script does not `source` it, so quoting is safe.
+- You can also set `SUBREDDITS`, `RPS`, `BACKFILL_MINUTES` in your `.env`; flags here override those.
 - If you see `tail: ingest.log: No such file or directory`, re-run the start script; it will create the log file.
 
 ## Troubleshooting

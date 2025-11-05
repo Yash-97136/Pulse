@@ -2,25 +2,18 @@
 set -euo pipefail
 
 # Start Reddit ingestion with sane defaults and logging to ingest.log
-# - Honors .env in this directory for credentials and settings
+# - The Python script reads .env itself via python-dotenv; we DO NOT source .env here
 # - Creates a local Python venv in .venv
 # - Writes PID to ingest.pid
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Load .env if present (do not error if missing)
-if [ -f .env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  source ./.env
-  set +a
-fi
-
 # Defaults (can be overridden via env or flags)
-RPS_DEFAULT=${RPS:-4}
-BACKFILL_DEFAULT=${BACKFILL_MINUTES:-60}
-SUBREDDITS_DEFAULT=${SUBREDDITS:-}
+# Defaults (Python will also read .env for these; flags here override .env)
+RPS_DEFAULT=4
+BACKFILL_DEFAULT=60
+SUBREDDITS_DEFAULT=
 
 usage() {
   cat <<EOF
