@@ -151,6 +151,92 @@ sudo systemctl enable --now caddy
 
 The Caddyfile serves the static UI at `https://yourapp.example.com` and proxies `/api/*` to `http://localhost:8086`.
 
+### 6b) Alternative: Nginx + Certbot (DuckDNS or any domain)
+If you prefer Nginx or are using a dynamic DNS provider like DuckDNS, use this path. It serves the SPA and proxies the API, then issues a Let’s Encrypt cert via Certbot.
+
+Prereqs:
+- Your domain (e.g., `pulseapp.duckdns.org`) must resolve to the VM2 public IP (verify with `dig +short <host>`)
+- VM2: ports 80 and 443 allowed in OCI Security List/NSG (host firewall `ufw` should allow or be inactive)
+
+1) Install Nginx (if not already):
+```bash
+sudo apt-get update -y || true  # If this fails due to a third-party repo, continue and install nginx only
+sudo apt-get install -y nginx
+```
+
+2) Serve the frontend and proxy the API:
+```bash
+sudo mkdir -p /var/www/pulse
+
+# Build frontend and deploy static files
+cd ~/Pulse/frontend/pulse-web
+npm ci
+npm run build
+sudo rsync -av --delete dist/ /var/www/pulse/
+
+# Nginx site for SPA + API proxy
+cat | sudo tee /etc/nginx/sites-available/pulse > /dev/null <<'NGINX'
+server {
+  listen 80;
+  server_name _;  # replaced to your domain below
+
+  root /var/www/pulse;
+  index index.html;
+
+  location /api/ {
+    proxy_pass http://127.0.0.1:8086/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}
+NGINX
+
+sudo ln -sf /etc/nginx/sites-available/pulse /etc/nginx/sites-enabled/pulse
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+3) Set your domain on the site:
+```bash
+DOMAIN=pulseapp.duckdns.org  # change to your host
+sudo sed -i "s/server_name _;/server_name ${DOMAIN};/" /etc/nginx/sites-available/pulse
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+4) Install Certbot (snap recommended if apt is blocked by a bad repo):
+```bash
+# If apt-get update fails due to e.g. Caddy repo GPG key, use snap for Certbot
+sudo snap install core && sudo snap refresh core
+sudo snap install --classic certbot
+sudo ln -sf /snap/bin/certbot /usr/bin/certbot
+certbot --version
+```
+
+5) Issue certificate and enable redirect:
+```bash
+DOMAIN=pulseapp.duckdns.org  # change to your host
+# Non-interactive issuance without email; replace with --email you@domain.com for proper registration
+sudo certbot --nginx -d "$DOMAIN" \
+  --agree-tos --non-interactive --register-unsafely-without-email --redirect
+```
+
+6) Verify HTTPS and auto-renew:
+```bash
+curl -I https://$DOMAIN
+sudo systemctl status certbot.timer || sudo systemctl list-timers | grep certbot
+```
+
+Troubleshooting:
+- If `curl -I https://...` times out but HTTP works, open port 443 in OCI Security List/NSG for the VM’s subnet.
+- If Certbot shows DNS SERVFAIL, wait 1–2 minutes and retry; some dynamic DNS providers (e.g., DuckDNS) can transiently fail AAAA queries.
+- If `apt-get update` fails with a Caddy repo GPG error, either add the missing key or temporarily remove that source; the snap-based Certbot path above avoids apt entirely.
+
 ## 7) DNS
 - app.yourdomain.com → VM2 public IP (A record)
 - api.yourdomain.com → VM2 public IP (A record)
