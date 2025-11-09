@@ -7,7 +7,18 @@ The records match the same JSON envelope that reddit_ingest.py produces:
 XADD RAW_POSTS_STREAM payload=<json>
 
 Usage:
-  python spike_redis.py --keyword demo_spike_123 --count 100 --rps 10
+    Basic spike:
+        python spike_redis.py --keyword demo_spike_123 --count 100 --rps 10
+
+    With warm-up phase (build baseline & history before main spike):
+        python spike_redis.py --keyword demo_spike_123 --warmup-count 200 --warmup-keyword-ratio 0.3 --count 300 --rps 12
+
+Warm-up rationale:
+    The anomaly detector needs a baseline (mean/stddev) and history samples. A warm-up phase
+    creates mixed posts where the keyword appears in only a fraction of documents so its
+    document-frequency ratio stays below suppression threshold (df-max-ratio) longer, letting
+    the global ZSET score accumulate gradually. After baseline forms, the main spike phase
+    sends every post with the keyword to produce a sharp jump in count and Z-score.
 
 Environment (optional; defaults shown):
   REDIS_HOST=localhost
@@ -19,9 +30,11 @@ Environment (optional; defaults shown):
 import argparse
 import json
 import os
+import random
+import string
 import time
 import uuid
-from typing import Dict
+from typing import Dict, List
 
 import redis
 
@@ -43,21 +56,33 @@ def make_rec(text: str) -> Dict[str, object]:
     }
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Emit a synthetic spike into Redis stream")
-    ap.add_argument("--keyword", required=True, help="Unique keyword to spike (avoid common words)")
-    ap.add_argument("--count", type=int, default=100, help="Number of messages to send")
-    ap.add_argument("--rps", type=float, default=10.0, help="Messages per second")
-    args = ap.parse_args()
+def gen_noise_tokens(n: int) -> List[str]:
+    out = []
+    for _ in range(n):
+        # short random lowercase token (avoids stopwords list by being random)
+        token = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        out.append(token)
+    return out
 
-    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 
-    interval = 1.0 / args.rps if args.rps > 0 else 0.0
-    print(f"Sending {args.count} msgs at ~{args.rps}/s into stream '{RAW_POSTS_STREAM}' with keyword '{args.keyword}'")
+def warmup_text(keyword: str, include_keyword: bool, idx: int) -> str:
+    noise = gen_noise_tokens(3)
+    parts = []
+    if include_keyword:
+        parts.append(keyword)
+    parts.extend(noise)
+    return f"{' '.join(parts)} baseline build {idx}"
 
+
+def spike_text(keyword: str, idx: int) -> str:
+    # Keep payload concise & single-keyword dominant to maximize jump
+    return f"{keyword} spike {idx}"  # single token + a counter
+
+
+def send_posts(r: redis.Redis, make_text_fn, total: int, interval: float):
     sent = 0
-    for i in range(args.count):
-        text = f"Breaking: {args.keyword} surge event {i}! This is a demo spike for anomalies."
+    for i in range(total):
+        text = make_text_fn(i)
         rec = make_rec(text)
         try:
             r.xadd(
@@ -71,8 +96,42 @@ def main():
             print(f"xadd failed: {e}")
         if interval > 0:
             time.sleep(interval)
+    return sent
 
-    print(f"Done. Sent {sent} messages.")
+
+def main():
+    ap = argparse.ArgumentParser(description="Emit a synthetic warm-up + spike into Redis stream")
+    ap.add_argument("--keyword", required=True, help="Unique keyword to spike (avoid common words)")
+    ap.add_argument("--warmup-count", dest="warmup_count", type=int, default=0, help="Number of warm-up (mixed) posts before spike")
+    ap.add_argument("--warmup-keyword-ratio", dest="warmup_keyword_ratio", type=float, default=0.3, help="Fraction of warm-up posts containing the keyword (0-1)")
+    ap.add_argument("--count", type=int, default=100, help="Number of spike posts (all with keyword)")
+    ap.add_argument("--rps", type=float, default=10.0, help="Messages per second for both phases")
+    args = ap.parse_args()
+
+    if not (0.0 <= args.warmup_keyword_ratio <= 1.0):
+        raise SystemExit("--warmup-keyword-ratio must be between 0 and 1")
+
+    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
+    interval = 1.0 / args.rps if args.rps > 0 else 0.0
+
+    # Warm-up phase
+    if args.warmup_count > 0:
+        print(f"Warm-up: sending {args.warmup_count} mixed posts (~{args.rps}/s), keyword ratio {args.warmup_keyword_ratio}")
+        def make_warm(i: int):
+            include_kw = random.random() < args.warmup_keyword_ratio
+            return warmup_text(args.keyword, include_kw, i)
+        warm_sent = send_posts(r, make_warm, args.warmup_count, interval)
+        print(f"Warm-up complete. Sent {warm_sent} posts.")
+        # Short pause to let scheduler tick & history accumulate
+        time.sleep(min(5.0, max(1.0, args.warmup_count / (args.rps * 10))))
+
+    # Spike phase
+    print(f"Spike: sending {args.count} posts (~{args.rps}/s) with keyword '{args.keyword}'")
+    def make_spike(i: int):
+        return spike_text(args.keyword, i)
+    spike_sent = send_posts(r, make_spike, args.count, interval)
+    print(f"Spike complete. Sent {spike_sent} posts.")
+    print("Done.")
 
 
 if __name__ == "__main__":
