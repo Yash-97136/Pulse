@@ -27,6 +27,9 @@ htmlcov/
 *.log
 logs/
 
+# PIDs
+*.pid
+
 # Editors/OS
 .idea/
 .vscode/
