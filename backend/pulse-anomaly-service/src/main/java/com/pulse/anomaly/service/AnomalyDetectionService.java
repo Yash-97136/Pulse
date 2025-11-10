@@ -175,23 +175,32 @@ public class AnomalyDetectionService {
     // 3) Anomaly detection for changed keywords
     for (String kw : changed) {
       Long nowCount = current.get(kw);
-    List<String> historyStrs = redis.opsForList().range("trends:history:" + kw, 0, -1);
-    if (historyStrs == null || historyStrs.size() < minSamples) continue;
+      List<String> historyStrs = redis.opsForList().range("trends:history:" + kw, 0, -1);
+      // history list is newest first; requires at least minSamples INCLUDING current
+      if (historyStrs == null || historyStrs.size() < minSamples) continue;
 
       List<Long> history = historyStrs.stream()
           .map(s -> { try { return Long.valueOf(s); } catch (Exception e) { return null; } })
           .filter(Objects::nonNull)
           .toList();
-    if (history.size() < minSamples) continue;
+      if (history.size() < minSamples) continue;
 
-      Stats stats = computeStats(history);
+      // ---- BASELINE FIX ----
+      // Exclude the newest (current) sample from the baseline statistics to avoid "polluting" the mean/std.
+      // This increases sensitivity to genuine spikes.
+      if (history.size() < 2) continue; // need at least current + 1 baseline
+      List<Long> baseline = history.subList(1, history.size());
+      if (baseline.size() < 2) continue; // sample std requires >=2 points
+      Stats stats = computeStats(baseline); // compute sample mean/std over baseline only
+      // ----------------------
+
       if (stats.mean() < baselineVolumeMin) {
         anomaliesSuppressedLowBaseline.increment();
         continue;
       }
-      if (stats.stddev() <= 0.0) continue;
+      if (stats.stddev() <= 0.0) continue; // cannot compute meaningful z
       double z = (nowCount - stats.mean()) / stats.stddev();
-      log.info("Anomaly check: kw='{}' curr={} mean={} std={} z={}",
+      log.info("Anomaly check: kw='{}' curr={} baselineMean={} baselineStd={} z={}",
           kw, nowCount, String.format("%.2f", stats.mean()),
           String.format("%.2f", stats.stddev()), String.format("%.2f", z));
       if (shouldEmit(kw, z)) {
@@ -212,15 +221,18 @@ public class AnomalyDetectionService {
 
   private Stats computeStats(List<Long> history) {
     int n = history.size();
+    if (n == 0) return new Stats(0.0, 0.0);
     double sum = 0.0;
     for (Long c : history) sum += c;
     double mean = sum / n;
+    if (n == 1) return new Stats(mean, 0.0); // single point: no variance
     double var = 0.0;
     for (Long c : history) {
       double d = c - mean;
       var += d * d;
     }
-    double stddev = Math.sqrt(var / n);
+    // sample standard deviation (n-1) for small baseline windows
+    double stddev = Math.sqrt(var / (n - 1));
     return new Stats(mean, stddev);
   }
 
