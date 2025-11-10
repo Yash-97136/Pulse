@@ -34,24 +34,20 @@ def make_post(text: str) -> Dict[str, object]:
         "lang": "en",
     }
 
-def send_pulse(r: redis.Redis, keyword: str, posts: int, ratio: float, rps: int = 0):
-    """Send a burst of posts with controlled RPS."""
-    kw_limit = int(posts * ratio + 0.5)
+def send_pulse(r: redis.Redis, keyword: str, posts: int, rps: int = 0):
+    """Send a burst of posts containing only the keyword."""
     pipe = r.pipeline(transaction=False)
-    sent_kw = 0
     delay = 1.0 / rps if rps > 0 else 0
     
     for i in range(posts):
-        text = f"{keyword} pulse {i}" if i < kw_limit else f"noise filler {i}"
-        rec = make_post(text)
+        # Every post contains only the keyword (clean, no extra words)
+        rec = make_post(keyword)
         pipe.xadd(RAW_POSTS_STREAM, {"payload": json.dumps(rec)}, maxlen=RAW_POSTS_MAXLEN, approximate=True)
-        if i < kw_limit:
-            sent_kw += 1
         if delay > 0 and i < posts - 1:
             time.sleep(delay)
     
     pipe.execute()
-    print(f"  pulse: {posts} posts, {sent_kw} with '{keyword}'")
+    print(f"  sent {posts} posts with '{keyword}'")
 
 def clear_state(r: redis.Redis, kw: str):
     """Reset all Redis keys for a keyword."""
@@ -60,7 +56,7 @@ def clear_state(r: redis.Redis, kw: str):
     r.zrem("trends:global", kw)
     r.hdel("trends:last_counts", kw)
     r.delete(f"anomaly:last_emitted_z:{kw}")
-    r.delete(f"trends:df:{kw}")  # clear doc-frequency if DF gating re-enabled
+    r.delete(f"trends:df:{kw}")
     print("  done")
 
 def compute_expected_z(r: redis.Redis, kw: str, zt: float = 3.0):
@@ -97,8 +93,7 @@ def main():
     ap = argparse.ArgumentParser(description="Deterministic anomaly spike script")
     ap.add_argument("--keyword", required=True, help="Unique keyword to spike")
     ap.add_argument("--pulses", type=int, default=MIN_SAMPLES, help="Number of baseline pulses")
-    ap.add_argument("--posts-per-pulse", type=int, default=100, help="Posts per baseline pulse")
-    ap.add_argument("--ratio", type=float, default=0.1, help="Keyword ratio in baseline (0.1 = low variance)")
+    ap.add_argument("--posts-per-pulse", type=int, default=10, help="Posts per baseline pulse (keep low for low variance)")
     ap.add_argument("--spike-posts", type=int, default=500, help="Final spike post count")
     ap.add_argument("--rps", type=int, default=0, help="Rate limit posts/sec (0=unlimited)")
     ap.add_argument("--show-z", action="store_true", help="Show z-score after spike")
@@ -114,17 +109,17 @@ def main():
     clear_state(r, args.keyword)
     time.sleep(1)
 
-    # Build baseline with low variance (small ratio = small increments)
+    # Build baseline with low variance (small posts-per-pulse = small increments)
     print(f"Building baseline ({args.pulses} pulses, {SCHEDULER_INTERVAL_SEC}s apart)...")
     for i in range(args.pulses):
         print(f" pulse {i+1}/{args.pulses}")
-        send_pulse(r, args.keyword, args.posts_per_pulse, args.ratio, args.rps)
+        send_pulse(r, args.keyword, args.posts_per_pulse, args.rps)
         if i < args.pulses - 1:
             print(f"  waiting {SCHEDULER_INTERVAL_SEC}s for scheduler...")
             time.sleep(SCHEDULER_INTERVAL_SEC)
 
-    print(f"\nSending spike ({args.spike_posts} posts, 100% keyword)...")
-    send_pulse(r, args.keyword, args.spike_posts, 1.0, args.rps)
+    print(f"\nSending spike ({args.spike_posts} posts)...")
+    send_pulse(r, args.keyword, args.spike_posts, args.rps)
     
     if args.show_z:
         print("\nWaiting for scheduler tick...")
