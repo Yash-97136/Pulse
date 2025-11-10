@@ -17,4 +17,4 @@ logging:
 pulse:
   processing:
     # Allow higher ubiquity so spikes are reflected in counts quickly
-    df-max-ratio: 0.50
+    df-max-ratio: 1.0

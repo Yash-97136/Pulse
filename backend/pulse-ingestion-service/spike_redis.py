@@ -71,12 +71,13 @@ def warmup_text(keyword: str, include_keyword: bool, idx: int) -> str:
     if include_keyword:
         parts.append(keyword)
     parts.extend(noise)
-    return f"{' '.join(parts)} baseline build {idx}"
+    # Avoid fixed English words that might trend (e.g., 'baseline', 'build')
+    return " ".join(parts + [str(idx)])
 
 
 def spike_text(keyword: str, idx: int) -> str:
-    # Keep payload concise & single-keyword dominant to maximize jump
-    return f"{keyword} spike {idx}"  # single token + a counter
+    # Keep payload concise & single-keyword dominant; avoid extra trending words
+    return f"{keyword} {idx}"
 
 
 def send_posts(r: redis.Redis, make_text_fn, total: int, interval: float):
