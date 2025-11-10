@@ -51,6 +51,7 @@ public class AnomalyDetectionService {
   private final Counter schedulerRuns;
   private final Timer schedulerDuration;
   private final long historyTtlSeconds;
+  private final int minSamples;
 
   public AnomalyDetectionService(StringRedisTemplate redis,
                                  AnomalyEventRepository anomalyRepo,
@@ -68,6 +69,7 @@ public class AnomalyDetectionService {
                                  @Value("${pulse.anomalies.last-z-ttl-seconds:86400}") long lastZTtlSeconds,
                                  @Value("${pulse.anomalies.baseline-volume-min:20}") double baselineVolumeMin,
                                  @Value("${pulse.anomalies.history-ttl-seconds:172800}") long historyTtlSeconds,
+                                 @Value("${pulse.anomalies.min-samples:10}") int minSamples,
                                  MeterRegistry metrics) {
     this.redis = redis;
     this.anomalyRepo = anomalyRepo;
@@ -91,6 +93,7 @@ public class AnomalyDetectionService {
     this.schedulerRuns = metrics.counter("pulse_scheduler_runs_total");
     this.schedulerDuration = metrics.timer("pulse_scheduler_run_duration_seconds");
     this.historyTtlSeconds = historyTtlSeconds;
+    this.minSamples = minSamples;
   }
 
   private Schema loadSchema(String path) {
@@ -172,14 +175,14 @@ public class AnomalyDetectionService {
     // 3) Anomaly detection for changed keywords
     for (String kw : changed) {
       Long nowCount = current.get(kw);
-      List<String> historyStrs = redis.opsForList().range("trends:history:" + kw, 0, -1);
-      if (historyStrs == null || historyStrs.size() < 10) continue;
+    List<String> historyStrs = redis.opsForList().range("trends:history:" + kw, 0, -1);
+    if (historyStrs == null || historyStrs.size() < minSamples) continue;
 
       List<Long> history = historyStrs.stream()
           .map(s -> { try { return Long.valueOf(s); } catch (Exception e) { return null; } })
           .filter(Objects::nonNull)
           .toList();
-      if (history.size() < 10) continue;
+    if (history.size() < minSamples) continue;
 
       Stats stats = computeStats(history);
       if (stats.mean() < baselineVolumeMin) {

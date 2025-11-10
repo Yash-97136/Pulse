@@ -11,7 +11,7 @@ Usage:
         python spike_redis.py --keyword demo_spike_123 --count 100 --rps 10
 
     With warm-up phase (build baseline & history before main spike):
-        python spike_redis.py --keyword demo_spike_123 --warmup-count 200 --warmup-keyword-ratio 0.3 --count 300 --rps 12
+        python spike_redis.py --keyword demo_spike_123 --warmup-count 200 --warmup-keyword-ratio 0.3 --count 300 --rps 8 --spike-rps 20
 
 Warm-up rationale:
     The anomaly detector needs a baseline (mean/stddev) and history samples. A warm-up phase
@@ -105,14 +105,15 @@ def main():
     ap.add_argument("--warmup-count", dest="warmup_count", type=int, default=0, help="Number of warm-up (mixed) posts before spike")
     ap.add_argument("--warmup-keyword-ratio", dest="warmup_keyword_ratio", type=float, default=0.3, help="Fraction of warm-up posts containing the keyword (0-1)")
     ap.add_argument("--count", type=int, default=100, help="Number of spike posts (all with keyword)")
-    ap.add_argument("--rps", type=float, default=10.0, help="Messages per second for both phases")
+    ap.add_argument("--rps", type=float, default=10.0, help="Messages per second for warm-up (and spike if --spike-rps not set)")
+    ap.add_argument("--spike-rps", dest="spike_rps", type=float, default=None, help="Messages per second for spike phase only (optional)")
     args = ap.parse_args()
 
     if not (0.0 <= args.warmup_keyword_ratio <= 1.0):
         raise SystemExit("--warmup-keyword-ratio must be between 0 and 1")
 
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
-    interval = 1.0 / args.rps if args.rps > 0 else 0.0
+    interval = 1.0 / args.rps if args.rps and args.rps > 0 else 0.0
 
     # Warm-up phase
     if args.warmup_count > 0:
@@ -126,10 +127,12 @@ def main():
         time.sleep(min(5.0, max(1.0, args.warmup_count / (args.rps * 10))))
 
     # Spike phase
-    print(f"Spike: sending {args.count} posts (~{args.rps}/s) with keyword '{args.keyword}'")
+    spike_rps = args.spike_rps if args.spike_rps is not None else args.rps
+    spike_interval = 1.0 / spike_rps if spike_rps and spike_rps > 0 else 0.0
+    print(f"Spike: sending {args.count} posts (~{spike_rps}/s) with keyword '{args.keyword}'")
     def make_spike(i: int):
         return spike_text(args.keyword, i)
-    spike_sent = send_posts(r, make_spike, args.count, interval)
+    spike_sent = send_posts(r, make_spike, args.count, spike_interval)
     print(f"Spike complete. Sent {spike_sent} posts.")
     print("Done.")
 

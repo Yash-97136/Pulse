@@ -36,12 +36,13 @@ pulse:
     history-window: ${HISTORY_WINDOW:360}
     min-z-step: ${ANOMALY_MIN_Z_STEP:1.0}
     last-z-ttl-seconds: ${ANOMALY_LAST_Z_TTL_SECONDS:86400}
-    baseline-volume-min: ${ANOMALY_BASELINE_VOLUME_MIN:30}
+    baseline-volume-min: ${ANOMALY_BASELINE_VOLUME_MIN:10}
     history-ttl-seconds: ${ANOMALY_HISTORY_TTL_SECONDS:172800}
+    min-samples: ${ANOMALY_MIN_SAMPLES:5}
   scheduler:
-    interval-ms: ${SCHEDULE_INTERVAL_MS:20000}
+    interval-ms: ${SCHEDULE_INTERVAL_MS:5000}
     lock-key: anomaly:lock
-    lock-ttl-ms: ${SCHEDULE_LOCK_TTL_MS:30000}
+    lock-ttl-ms: ${SCHEDULE_LOCK_TTL_MS:20000}
 
 logging:
   level:
