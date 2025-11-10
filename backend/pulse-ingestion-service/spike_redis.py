@@ -30,112 +30,77 @@ Environment (optional; defaults shown):
 import argparse
 import json
 import os
-import random
-import string
 import time
 import uuid
 from typing import Dict, List
 
 import redis
 
+SCHEDULER_INTERVAL_SEC = 5.1   # anomaly scheduler period + small buffer
+MIN_SAMPLES = 5                # build 5 baseline points
+POSTS_PER_PULSE = 100          # per baseline pulse
+KEYWORD_RATIO = 0.5            # 50% of posts contain the keyword (stable baseline)
+SPIKE_POSTS = 500              # final spike: all contain the keyword
+
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-RAW_POSTS_STREAM = os.getenv("RAW_POSTS_STREAM", "raw_posts")
-RAW_POSTS_MAXLEN = int(os.getenv("RAW_POSTS_MAXLEN", "100000"))
+REDIS_DB   = int(os.getenv("REDIS_DB", "0"))
+STREAM     = os.getenv("RAW_POSTS_STREAM", "raw_posts")
+MAXLEN     = int(os.getenv("RAW_POSTS_MAXLEN", "100000"))
 
 
-def make_rec(text: str) -> Dict[str, object]:
-    now_ms = int(time.time() * 1000)
+def make_post(text: str):
     return {
         "id": str(uuid.uuid4()),
         "text": text[:8000],
-        "timestamp": now_ms,
-        "source": "spike-test",
+        "timestamp": int(time.time() * 1000),
+        "source": "demo-spike",
         "lang": "en",
     }
 
 
-def gen_noise_tokens(n: int) -> List[str]:
-    out = []
-    for _ in range(n):
-        # short random lowercase token (avoids stopwords list by being random)
-        token = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-        out.append(token)
-    return out
+def send_pulse(r: redis.Redis, keyword: str, posts: int, ratio: float):
+    kw_limit = int(posts * ratio + 0.5)
+    pipe = r.pipeline(transaction=False)
+    sent_kw = 0
+    for i in range(posts):
+        text = f"{keyword} pulse {i}" if i < kw_limit else f"noise {i}"
+        pipe.xadd(STREAM, {"payload": json.dumps(make_post(text))}, maxlen=MAXLEN, approximate=True)
+        if i < kw_limit: sent_kw += 1
+    pipe.execute()
+    print(f"  pulse: {posts} posts, {sent_kw} with '{keyword}'")
 
 
-def warmup_text(keyword: str, include_keyword: bool, idx: int) -> str:
-    noise = gen_noise_tokens(3)
-    parts = []
-    if include_keyword:
-        parts.append(keyword)
-    parts.extend(noise)
-    # Avoid fixed English words that might trend (e.g., 'baseline', 'build')
-    return " ".join(parts + [str(idx)])
-
-
-def spike_text(keyword: str, idx: int) -> str:
-    # Keep payload concise & single-keyword dominant; avoid extra trending words
-    return f"{keyword} {idx}"
-
-
-def send_posts(r: redis.Redis, make_text_fn, total: int, interval: float):
-    sent = 0
-    for i in range(total):
-        text = make_text_fn(i)
-        rec = make_rec(text)
-        try:
-            r.xadd(
-                RAW_POSTS_STREAM,
-                {"payload": json.dumps(rec)},
-                maxlen=RAW_POSTS_MAXLEN,
-                approximate=True,
-            )
-            sent += 1
-        except Exception as e:
-            print(f"xadd failed: {e}")
-        if interval > 0:
-            time.sleep(interval)
-    return sent
+def clear_state(r: redis.Redis, kw: str):
+    print(f"Clearing Redis state for '{kw}'")
+    r.delete(f"trends:history:{kw}")
+    r.zrem("trends:global", kw)
+    r.hdel("trends:last_counts", kw)
+    r.delete(f"anomaly:last_emitted_z:{kw}")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Emit a synthetic warm-up + spike into Redis stream")
-    ap.add_argument("--keyword", required=True, help="Unique keyword to spike (avoid common words)")
-    ap.add_argument("--warmup-count", dest="warmup_count", type=int, default=0, help="Number of warm-up (mixed) posts before spike")
-    ap.add_argument("--warmup-keyword-ratio", dest="warmup_keyword_ratio", type=float, default=0.3, help="Fraction of warm-up posts containing the keyword (0-1)")
-    ap.add_argument("--count", type=int, default=100, help="Number of spike posts (all with keyword)")
-    ap.add_argument("--rps", type=float, default=10.0, help="Messages per second for warm-up (and spike if --spike-rps not set)")
-    ap.add_argument("--spike-rps", dest="spike_rps", type=float, default=None, help="Messages per second for spike phase only (optional)")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--keyword", required=True)
+    ap.add_argument("--pulses", type=int, default=MIN_SAMPLES)
+    ap.add_argument("--posts-per-pulse", type=int, default=POSTS_PER_PULSE)
+    ap.add_argument("--ratio", type=float, default=KEYWORD_RATIO)
+    ap.add_argument("--spike-posts", type=int, default=SPIKE_POSTS)
     args = ap.parse_args()
 
-    if not (0.0 <= args.warmup_keyword_ratio <= 1.0):
-        raise SystemExit("--warmup-keyword-ratio must be between 0 and 1")
-
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
-    interval = 1.0 / args.rps if args.rps and args.rps > 0 else 0.0
+    clear_state(r, args.keyword); time.sleep(1)
 
-    # Warm-up phase
-    if args.warmup_count > 0:
-        print(f"Warm-up: sending {args.warmup_count} mixed posts (~{args.rps}/s), keyword ratio {args.warmup_keyword_ratio}")
-        def make_warm(i: int):
-            include_kw = random.random() < args.warmup_keyword_ratio
-            return warmup_text(args.keyword, include_kw, i)
-        warm_sent = send_posts(r, make_warm, args.warmup_count, interval)
-        print(f"Warm-up complete. Sent {warm_sent} posts.")
-        # Short pause to let scheduler tick & history accumulate
-        time.sleep(min(5.0, max(1.0, args.warmup_count / (args.rps * 10))))
+    print(f"Building baseline ({args.pulses} samples)...")
+    for i in range(args.pulses):
+        print(f" baseline {i+1}/{args.pulses}")
+        send_pulse(r, args.keyword, args.posts_per_pulse, args.ratio)
+        print(f"  waiting {SCHEDULER_INTERVAL_SEC}s for scheduler...")
+        time.sleep(SCHEDULER_INTERVAL_SEC)
 
-    # Spike phase
-    spike_rps = args.spike_rps if args.spike_rps is not None else args.rps
-    spike_interval = 1.0 / spike_rps if spike_rps and spike_rps > 0 else 0.0
-    print(f"Spike: sending {args.count} posts (~{spike_rps}/s) with keyword '{args.keyword}'")
-    def make_spike(i: int):
-        return spike_text(args.keyword, i)
-    spike_sent = send_posts(r, make_spike, args.count, spike_interval)
-    print(f"Spike complete. Sent {spike_sent} posts.")
-    print("Done.")
+    print(f"Sending spike of {args.spike_posts} posts...")
+    send_pulse(r, args.keyword, args.spike_posts, 1.0)
+    print("Done. Check anomalies in ~10s.")
 
 
 if __name__ == "__main__":

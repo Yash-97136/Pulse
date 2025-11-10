@@ -32,7 +32,7 @@ pulse:
     last-counts-hash: trends:last_counts
   anomalies:
     topic: ${ANOMALY_TOPIC:detected_anomalies}
-    z-threshold: ${Z_THRESHOLD:3.0}
+    z-threshold: ${Z_THRESHOLD:2.0}
     history-window: ${HISTORY_WINDOW:360}
     min-z-step: ${ANOMALY_MIN_Z_STEP:1.0}
     last-z-ttl-seconds: ${ANOMALY_LAST_Z_TTL_SECONDS:86400}
