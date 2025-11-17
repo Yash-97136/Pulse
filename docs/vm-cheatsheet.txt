@@ -1,0 +1,164 @@
+Pulse Operations Cheatsheet
+===========================
+
+SSH Access
+----------
+Public VM (IP: 192.9.140.17):
+  ssh -i ~/.ssh/oci_pulse ubuntu@192.9.140.17
+
+Private Host / Internal Redis (IP: 10.0.0.37) via jump:
+  ssh -i ~/.ssh/oci_pulse -J ubuntu@192.9.140.17 ubuntu@10.0.0.37
+
+Direct (if your local network routes 10.0.0.0/24 over the tunnel):
+  ssh -i ~/.ssh/oci_pulse ubuntu@10.0.0.37
+
+IP Reference
+------------
+Public VM: 192.9.140.17 (exposed to internet; runs services and ingestion)
+Private/Redis IP: 10.0.0.37 (internal address used by services for Redis host)
+Adjust if infrastructure changes; update this section when IPs rotate.
+
+Copy local file to VM:
+  scp -i ~/.ssh/oci_pulse localfile.txt ubuntu@<public-ip>:~/
+
+Services: Build & Run (Processing / Anomaly)
+-------------------------------------------
+Build processing:
+  cd ~/Pulse/backend/pulse-processing-service
+  mvn -q -DskipTests clean package
+Start processing (redis pipeline, df-max-ratio override):
+  cd target
+  PROC_JAR=$(ls *SNAPSHOT.jar | grep -v original | head -n1)
+  nohup java -jar "$PROC_JAR" --spring.profiles.active=redis-pipeline \
+    --pulse.processing.df-max-ratio=1.0 > ~/processing.log 2>&1 &
+Tail:
+  tail -n 80 ~/processing.log
+
+Build anomaly:
+  cd ~/Pulse/backend/pulse-anomaly-service
+  mvn -q -DskipTests clean package
+Start anomaly:
+  cd target
+  ANOM_JAR=$(ls *SNAPSHOT.jar | grep -v original | head -n1)
+  nohup java -jar "$ANOM_JAR" --spring.profiles.active=redis-pipeline \
+    --pulse.anomalies.z-threshold=3.0 > ~/anomaly.log 2>&1 &
+Tail:
+  tail -n 80 ~/anomaly.log | egrep 'Started|Anomaly|z='
+
+Stop services:
+  pkill -f pulse-processing-service || true
+  pkill -f pulse-anomaly-service || true
+
+Ingestion Service
+-----------------
+Stop ingestion:
+  cd ~/Pulse/backend/pulse-ingestion-service
+  ./stop-reddit.sh
+
+Start ingestion (RPS & backfill):
+  cd ~/Pulse/backend/pulse-ingestion-service
+  ./start-reddit.sh --force --rps 4 --backfill-minutes 90 --subreddits "technology+worldnews"
+Check log:
+  tail -n 60 ingest.log
+PID:
+  cat ingest.pid
+Ensure stopped:
+  pgrep -af reddit_ingest.py || echo "stopped"
+
+Spike Script (Trigger Anomaly)
+------------------------------
+Run deterministic spike:
+  cd ~/Pulse/backend/pulse-ingestion-service
+  .venv/bin/python spike_redis.py --keyword demofire --pulses 5 --posts-per-pulse 10 --spike-posts 500 --show-z
+
+Redis Trend & Anomaly Checks
+----------------------------
+Top 20 keywords:
+  redis-cli -h 10.0.0.37 -n 0 ZREVRANGE trends:global 0 19 WITHSCORES
+Keyword score:
+  redis-cli -h 10.0.0.37 -n 0 ZSCORE trends:global demofire
+Keyword rank:
+  redis-cli -h 10.0.0.37 -n 0 ZREVRANK trends:global demofire
+History (newest first):
+  redis-cli -h 10.0.0.37 -n 0 LRANGE trends:history:demofire 0 9
+Last emitted z:
+  redis-cli -h 10.0.0.37 -n 0 GET anomaly:last_emitted_z:demofire
+Doc frequency (if used):
+  redis-cli -h 10.0.0.37 -n 0 GET trends:df:demofire
+Count of tracked keywords:
+  redis-cli -h 10.0.0.37 -n 0 ZCARD trends:global
+Raw posts stream length:
+  redis-cli -h 10.0.0.37 -n 0 XLEN raw_posts
+Stream info:
+  redis-cli -h 10.0.0.37 -n 0 XINFO STREAM raw_posts
+
+Z-Score Manual Calculation (Exclude current, sample std)
+-------------------------------------------------------
+  redis-cli -h 10.0.0.37 -n 0 LRANGE trends:history:demofire 0 9 | \
+  awk 'NR==1{cur=$1;next}{a[++n]=$1;s+=$1}END{if(n<2){print "baseline too short";exit};m=s/n;for(i=1;i<=n;i++){d=a[i]-m;v+=d*d};sd=sqrt(v/(n-1));z=(cur-m)/sd;printf "n=%d mean=%.2f sd=%.2f cur=%d z=%.2f\n",n,m,sd,cur,z}'
+
+Cleanup / Reset
+---------------
+Selective keyword cleanup (replace <kw>):
+  redis-cli -h 10.0.0.37 -n 0 DEL trends:history:<kw> && \
+  redis-cli -h 10.0.0.37 -n 0 ZREM trends:global <kw> && \
+  redis-cli -h 10.0.0.37 -n 0 HDEL trends:last_counts <kw> && \
+  redis-cli -h 10.0.0.37 -n 0 DEL anomaly:last_emitted_z:<kw> && \
+  redis-cli -h 10.0.0.37 -n 0 DEL trends:df:<kw>
+
+Bulk cleanup example:
+  redis-cli -h 10.0.0.37 -n 0 ZREM trends:global pulse build baseline flashspike noise spike filler demo xyz capstone ultra anomalies
+
+Full DB flush (DANGEROUS):
+  redis-cli -h 10.0.0.37 -n 0 FLUSHDB
+
+Monitoring & Logs
+-----------------
+Processing/anomaly process list:
+  ps -ef | egrep 'pulse-(processing|anomaly)-service' | grep -v grep
+Tail processing:
+  tail -n 100 ~/processing.log
+Tail anomaly:
+  tail -n 100 ~/anomaly.log
+Check memory:
+  redis-cli -h 10.0.0.37 -n 0 INFO memory | egrep 'used_memory_human|maxmemory_human'
+
+Environment Overrides (Examples)
+--------------------------------
+  export PULSE_PROCESSING_DF_MAX_RATIO=1.0
+  export PULSE_ANOMALIES_Z_THRESHOLD=2.5
+
+Restart Sequence (Quick)
+------------------------
+  pkill -f pulse-processing-service || true
+  pkill -f pulse-anomaly-service || true
+  # build & start processing
+  cd ~/Pulse/backend/pulse-processing-service && mvn -q -DskipTests clean package && \
+    cd target && PROC_JAR=$(ls *SNAPSHOT.jar | grep -v original | head -n1) && \
+    nohup java -jar "$PROC_JAR" --spring.profiles.active=redis-pipeline > ~/processing.log 2>&1 &
+  # build & start anomaly
+  cd ~/Pulse/backend/pulse-anomaly-service && mvn -q -DskipTests clean package && \
+    cd target && ANOM_JAR=$(ls *SNAPSHOT.jar | grep -v original | head -n1) && \
+    nohup java -jar "$ANOM_JAR" --spring.profiles.active=redis-pipeline > ~/anomaly.log 2>&1 &
+
+Ingestion Restart
+-----------------
+  cd ~/Pulse/backend/pulse-ingestion-service
+  ./stop-reddit.sh && ./start-reddit.sh --force --rps 5 --backfill-minutes 120
+
+Troubleshooting Tips
+--------------------
+No anomaly emitted:
+  1. Check z: redis-cli ... GET anomaly:last_emitted_z:<kw>
+  2. Verify baseline samples >= min-samples
+  3. Compute manual z (awk command above)
+  4. Raise spike posts or lower z-threshold (restart anomaly service)
+
+High variance baseline (low z):
+  Use small posts-per-pulse (e.g., 10) and large final spike.
+
+Redis unreachable from local:
+  ssh -N -L 6379:127.0.0.1:6379 ubuntu@<public-ip>
+  redis-cli -h 127.0.0.1 -p 6379 PING
+
+END
