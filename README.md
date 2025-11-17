@@ -163,16 +163,6 @@ Key ideas:
 
 ---
 
-## Screenshots
-
-You can embed screenshots of the live dashboard here once you have them, for example:
-
-![alt text](image.png)
-
-Place the actual PNG files under `docs/screenshots/` in the repository.
-
----
-
 ## License
 
 TBD.
