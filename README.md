@@ -163,7 +163,3 @@ Key ideas:
 
 ---
 
-## License
-
-TBD.
-
