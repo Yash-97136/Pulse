@@ -36,7 +36,7 @@ pulse:
       consumer: ${REDIS_STREAM_CONSUMER:processor-1}
   processing:
     df-ttl-seconds: 86400   # rolling window length (seconds)
-    df-max-ratio: 1.0      # drop tokens appearing in >30% of posts in window (faster spike sensitivity)
+    df-max-ratio: 0.30      # drop very common tokens (>30% of posts)
   maintenance:
     interval-ms: 60000
     max-tokens: 100000
