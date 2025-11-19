@@ -49,7 +49,7 @@ pulse:
 
 logging:
   level:
-    org.springframework: debug
+    org.springframework: info
     org.springframework.kafka: warn
     com.pulse.anomaly: debug
 
