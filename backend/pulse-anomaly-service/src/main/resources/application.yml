@@ -28,8 +28,8 @@ spring:
 pulse:
   trends:
     zset-key: trends:global
-    top-n: ${PULSE_TOP_N:100}
     last-counts-hash: trends:last_counts
+    activity-zset-key: trends:lastSeen
   anomalies:
     topic: ${ANOMALY_TOPIC:detected_anomalies}
     z-threshold: ${Z_THRESHOLD:2.5}
@@ -39,16 +39,19 @@ pulse:
     baseline-volume-min: ${ANOMALY_BASELINE_VOLUME_MIN:10}
     history-ttl-seconds: ${ANOMALY_HISTORY_TTL_SECONDS:172800}
     min-samples: ${ANOMALY_MIN_SAMPLES:10}
+    # time-based candidate scan horizon/retention (millis)
+    activity-horizon-ms: ${PULSE_ACTIVITY_HORIZON_MS:60000}
+    activity-retention-ms: ${PULSE_ACTIVITY_RETENTION_MS:86400000}
   scheduler:
-    interval-ms: ${SCHEDULE_INTERVAL_MS:5000}
+    interval-ms: ${PULSE_SCHEDULER_INTERVAL_MS:5000}
     lock-key: anomaly:lock
     lock-ttl-ms: ${SCHEDULE_LOCK_TTL_MS:20000}
 
 logging:
   level:
-    org.springframework: info
+    org.springframework: debug
     org.springframework.kafka: warn
-    com.pulse.anomaly: info
+    com.pulse.anomaly: debug
 
 management:
   endpoints:

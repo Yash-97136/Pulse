@@ -94,10 +94,10 @@ public class StreamProcessor {
             // Count token toward global trends
             redis.opsForZSet().incrementScore("trends:global", token, 1.0);
 
-            // Mark activity: last seen timestamp for time-windowed active keyword KPI
+            // Mark activity: last seen timestamp (epoch seconds) for time-windowed active keyword KPI
             try {
-                long nowMillis = Instant.now().toEpochMilli();
-                redis.opsForZSet().add(activityZsetKey, token, nowMillis);
+                long nowSec = Instant.now().getEpochSecond();
+                redis.opsForZSet().add(activityZsetKey, token, nowSec);
             } catch (Exception ignored) {}
         }
     }
@@ -106,8 +106,8 @@ public class StreamProcessor {
     @Scheduled(fixedDelayString = "${pulse.maintenance.interval-ms:60000}")
     void maintenance() {
         try {
-            // 1) Trim activity ZSET by age to keep memory bounded
-            long cutoff = Instant.now().minusSeconds(activityTtlSeconds).toEpochMilli();
+            // 1) Trim activity ZSET by age (epoch seconds) to keep memory bounded
+            long cutoff = Instant.now().minusSeconds(activityTtlSeconds).getEpochSecond();
             try {
                 Long removed = redis.opsForZSet().removeRangeByScore(activityZsetKey, Double.NEGATIVE_INFINITY, (double) cutoff);
                 if (removed != null && removed > 0) {

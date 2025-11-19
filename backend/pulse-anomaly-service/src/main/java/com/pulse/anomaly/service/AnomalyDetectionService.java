@@ -31,9 +31,8 @@ public class AnomalyDetectionService {
   private final StringRedisTemplate redis;
   private final AnomalyEventRepository anomalyRepo;
   private final KafkaTemplate<String, GenericRecord> kafka;
-  private final String zsetKey;
+  private final String zsetKey;                 // cumulative counts (unchanged)
   private final String anomalyTopic;
-  private final int topN;
   private final double zThreshold;
   private final long cooldownSeconds;
   private final double minZStep;
@@ -53,12 +52,17 @@ public class AnomalyDetectionService {
   private final long historyTtlSeconds;
   private final int minSamples;
 
+  // NEW: time-based candidate scanning + retention
+  private final String activityZsetKey;        // trends:lastSeen
+  private final long activityHorizonSeconds;   // scan last N seconds each tick
+  private final long activityRetentionSeconds; // keep lastSeen for 24h
+  private final long activityTrimIntervalMs;   // how often to trim lastSeen
+
   public AnomalyDetectionService(StringRedisTemplate redis,
                                  AnomalyEventRepository anomalyRepo,
                                  KafkaTemplate<String, GenericRecord> kafka,
                                  @Value("${pulse.trends.zset-key}") String zsetKey,
                                  @Value("${pulse.anomalies.topic}") String anomalyTopic,
-                                 @Value("${pulse.trends.top-n}") int topN,
                                  @Value("${pulse.anomalies.z-threshold}") double zThreshold,
                                  @Value("${pulse.anomalies.history-window}") int historyWindow,
                                  @Value("${pulse.trends.last-counts-hash}") String lastCountsHash,
@@ -70,13 +74,17 @@ public class AnomalyDetectionService {
                                  @Value("${pulse.anomalies.baseline-volume-min:20}") double baselineVolumeMin,
                                  @Value("${pulse.anomalies.history-ttl-seconds:172800}") long historyTtlSeconds,
                                  @Value("${pulse.anomalies.min-samples:10}") int minSamples,
+                                 // NEW params
+                                 @Value("${pulse.trends.activity-zset-key:trends:lastSeen}") String activityZsetKey,
+                                 @Value("${pulse.anomalies.activity-horizon-seconds:60}") long activityHorizonSeconds,
+                                 @Value("${pulse.anomalies.activity-retention-seconds:86400}") long activityRetentionSeconds,
+                                 @Value("${pulse.maintenance.activity-trim-interval-ms:60000}") long activityTrimIntervalMs,
                                  MeterRegistry metrics) {
     this.redis = redis;
     this.anomalyRepo = anomalyRepo;
     this.kafka = kafka;
     this.zsetKey = zsetKey;
     this.anomalyTopic = anomalyTopic;
-    this.topN = topN;
     this.zThreshold = zThreshold;
     this.historyWindow = historyWindow;
     this.anomalySchema = loadSchema("/avro/detected_anomaly.avsc");
@@ -94,6 +102,12 @@ public class AnomalyDetectionService {
     this.schedulerDuration = metrics.timer("pulse_scheduler_run_duration_seconds");
     this.historyTtlSeconds = historyTtlSeconds;
     this.minSamples = minSamples;
+
+    // NEW assigns
+    this.activityZsetKey = activityZsetKey;
+    this.activityHorizonSeconds = activityHorizonSeconds;
+    this.activityRetentionSeconds = activityRetentionSeconds;
+    this.activityTrimIntervalMs = activityTrimIntervalMs;
   }
 
   private Schema loadSchema(String path) {
@@ -130,21 +144,28 @@ public class AnomalyDetectionService {
 
   private void runOnce() {
     Instant now = Instant.now();
+    long nowSec = now.getEpochSecond();
 
-    // 1) Read topN from Redis ZSET
-    Set<ZSetOperations.TypedTuple<String>> tuples =
-        redis.opsForZSet().reverseRangeWithScores(zsetKey, 0, Math.max(0, topN - 1));
-    if (tuples == null || tuples.isEmpty()) return;
+    // TIME-BASED CANDIDATES: keywords active within the last horizon seconds
+    Set<String> recent = Optional.ofNullable(
+        redis.opsForZSet().rangeByScore(activityZsetKey,
+            nowSec - activityHorizonSeconds,
+            Double.POSITIVE_INFINITY)
+    ).orElseGet(Set::of);
+    if (recent.isEmpty()) {
+      log.debug("No recently active keywords in the last {}s", activityHorizonSeconds);
+      return;
+    }
 
+    // Resolve current cumulative counts from zsetKey for each candidate
     Map<String, Long> current = new HashMap<>();
-    for (ZSetOperations.TypedTuple<String> t : tuples) {
-      if (t.getValue() == null) continue;
-      long c = Math.round(Optional.ofNullable(t.getScore()).orElse(0.0));
-      current.put(t.getValue(), c);
+    for (String kw : recent) {
+      Double s = redis.opsForZSet().score(zsetKey, kw);
+      if (s != null && s > 0) current.put(kw, Math.round(s));
     }
     if (current.isEmpty()) return;
 
-    // 2) Dedupe: only process changed keywords
+    // Dedupe: only process changed keywords (vs lastCountsHash)
     var hashOps = redis.opsForHash();
     List<Object> keys = current.keySet().stream().map(Object.class::cast).toList();
     List<Object> prevVals = hashOps.multiGet(lastCountsHash, keys);
@@ -159,11 +180,11 @@ public class AnomalyDetectionService {
       if (!Objects.equals(prev, nowCount)) {
         changed.add(kw);
         toUpdateHash.put(kw, nowCount.toString());
-        // Store count in history (Redis List)
+        // Store count in history (newest first)
         String histKey = "trends:history:" + kw;
         redis.opsForList().leftPush(histKey, nowCount.toString());
-  redis.opsForList().trim(histKey, 0, historyWindow - 1); // keep last N samples
-  try { redis.expire(histKey, Duration.ofSeconds(historyTtlSeconds)); } catch (Exception ignored) {}
+        redis.opsForList().trim(histKey, 0, historyWindow - 1);
+        try { redis.expire(histKey, Duration.ofSeconds(historyTtlSeconds)); } catch (Exception ignored) {}
       }
     }
     if (changed.isEmpty()){
@@ -172,11 +193,10 @@ public class AnomalyDetectionService {
     }
     hashOps.putAll(lastCountsHash, toUpdateHash);
 
-    // 3) Anomaly detection for changed keywords
+    // Anomaly detection for changed keywords (unchanged logic)
     for (String kw : changed) {
       Long nowCount = current.get(kw);
       List<String> historyStrs = redis.opsForList().range("trends:history:" + kw, 0, -1);
-      // history list is newest first; requires at least minSamples INCLUDING current
       if (historyStrs == null || historyStrs.size() < minSamples) continue;
 
       List<Long> history = historyStrs.stream()
@@ -185,20 +205,18 @@ public class AnomalyDetectionService {
           .toList();
       if (history.size() < minSamples) continue;
 
-      // ---- BASELINE FIX ----
-      // Exclude the newest (current) sample from the baseline statistics to avoid "polluting" the mean/std.
-      // This increases sensitivity to genuine spikes.
-      if (history.size() < 2) continue; // need at least current + 1 baseline
+      // Exclude current sample from baseline
+      if (history.size() < 2) continue;
       List<Long> baseline = history.subList(1, history.size());
-      if (baseline.size() < 2) continue; // sample std requires >=2 points
-      Stats stats = computeStats(baseline); // compute sample mean/std over baseline only
-      // ----------------------
+      if (baseline.size() < 2) continue;
+      Stats stats = computeStats(baseline);
 
       if (stats.mean() < baselineVolumeMin) {
         anomaliesSuppressedLowBaseline.increment();
         continue;
       }
-      if (stats.stddev() <= 0.0) continue; // cannot compute meaningful z
+      if (stats.stddev() <= 0.0) continue;
+
       double z = (nowCount - stats.mean()) / stats.stddev();
       log.info("Anomaly check: kw='{}' curr={} baselineMean={} baselineStd={} z={}",
           kw, nowCount, String.format("%.2f", stats.mean()),
@@ -208,6 +226,15 @@ public class AnomalyDetectionService {
         emitAnomaly(kw, nowCount, stats, z, now);
       }
     }
+  }
+
+  // Periodic pruning of lastSeen so it doesn’t grow unbounded (24h retention)
+  @Scheduled(fixedDelayString = "${pulse.maintenance.activity-trim-interval-ms:60000}")
+  public void trimActivityZset() {
+    long cutoffSec = Instant.now().getEpochSecond() - activityRetentionSeconds;
+    Long removed = redis.opsForZSet()
+        .removeRangeByScore(activityZsetKey, Double.NEGATIVE_INFINITY, cutoffSec);
+    log.debug("activity trim removed={}", removed == null ? 0 : removed);
   }
 
   private Long parseLong(Object obj) {
