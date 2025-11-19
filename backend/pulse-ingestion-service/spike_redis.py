@@ -14,8 +14,8 @@ from typing import Dict
 import redis
 
 # Scheduler settings (match anomaly service config)
-SCHEDULER_INTERVAL_SEC = 5.2  # 5000ms + 200ms buffer for safety
-MIN_SAMPLES = 5               # min-samples in anomaly config (includes current)
+SCHEDULER_INTERVAL_SEC = 6  # 5000ms + 200ms buffer for safety
+MIN_SAMPLES = 10              # [CHANGED] matched to backend 'min-samples: 10'
 
 # Redis connection
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -50,20 +50,19 @@ def send_pulse(r: redis.Redis, keyword: str, posts: int, rps: int = 0):
     print(f"  sent {posts} posts with '{keyword}'")
 
 def clear_state(r: redis.Redis, kw: str):
-    """Reset all Redis keys for a keyword."""
+    """Reset all Redis keys for a keyword and PRIME the doc counter."""
     print(f"Clearing state for '{kw}'")
     r.delete(f"trends:history:{kw}")
     r.zrem("trends:global", kw)
     r.hdel("trends:last_counts", kw)
     r.delete(f"anomaly:last_emitted_z:{kw}")
     r.delete(f"trends:df:{kw}")
-    print("  done")
 
 def compute_expected_z(r: redis.Redis, kw: str, zt: float = 3.0):
     """Compute expected z-score and needed posts (baseline excludes current, sample std)."""
     history_strs = r.lrange(f"trends:history:{kw}", 0, -1)
     if not history_strs or len(history_strs) < 2:
-        print("  not enough history")
+        print(f"  not enough history (n={len(history_strs) if history_strs else 0})")
         return
     
     history = [int(x) for x in history_strs]
