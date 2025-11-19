@@ -50,7 +50,8 @@ pulse:
 logging:
   level:
     org.springframework: info
-    org.springframework.kafka: warn
+    org.springframework.kafka: off
+    org.apache.kafka: off
     com.pulse.anomaly: debug
 
 management:
