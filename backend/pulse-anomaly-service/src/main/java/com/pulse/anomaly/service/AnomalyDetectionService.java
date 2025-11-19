@@ -148,10 +148,11 @@ public class AnomalyDetectionService {
 
     // TIME-BASED CANDIDATES: keywords active within the last horizon seconds
     Set<String> recent = Optional.ofNullable(
-        redis.opsForZSet().rangeByScore(activityZsetKey,
-            nowSec - activityHorizonSeconds,
-            Double.POSITIVE_INFINITY)
+      redis.opsForZSet().rangeByScore(activityZsetKey,
+        nowSec - activityHorizonSeconds,
+        Double.POSITIVE_INFINITY)
     ).orElseGet(Set::of);
+    log.debug("Recently active keywords in the last {}s: {}", activityHorizonSeconds, recent);
     if (recent.isEmpty()) {
       log.debug("No recently active keywords in the last {}s", activityHorizonSeconds);
       return;
