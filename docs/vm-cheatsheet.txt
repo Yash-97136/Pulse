@@ -128,19 +128,6 @@ Environment Overrides (Examples)
   export PULSE_PROCESSING_DF_MAX_RATIO=1.0
   export PULSE_ANOMALIES_Z_THRESHOLD=2.5
 
-Restart Sequence (Quick)
-------------------------
-  pkill -f pulse-processing-service || true
-  pkill -f pulse-anomaly-service || true
-  # build & start processing
-  cd ~/Pulse/backend/pulse-processing-service && mvn -q -DskipTests clean package && \
-    cd target && PROC_JAR=$(ls *SNAPSHOT.jar | grep -v original | head -n1) && \
-    nohup java -jar "$PROC_JAR" --spring.profiles.active=redis-pipeline > ~/processing.log 2>&1 &
-  # build & start anomaly
-  cd ~/Pulse/backend/pulse-anomaly-service && mvn -q -DskipTests clean package && \
-    cd target && ANOM_JAR=$(ls *SNAPSHOT.jar | grep -v original | head -n1) && \
-    nohup java -jar "$ANOM_JAR" --spring.profiles.active=redis-pipeline > ~/anomaly.log 2>&1 &
-
 Ingestion Restart
 -----------------
   cd ~/Pulse/backend/pulse-ingestion-service
@@ -160,5 +147,51 @@ High variance baseline (low z):
 Redis unreachable from local:
   ssh -N -L 6379:127.0.0.1:6379 ubuntu@<public-ip>
   redis-cli -h 127.0.0.1 -p 6379 PING
+
+
+# History (windowed counts, newest first)
+redis-cli -h 10.0.0.37 -n 0 LRANGE trends:history:capstonedemo 0 9
+
+# Current global score (cumulative count)
+redis-cli -h 10.0.0.37 -n 0 ZSCORE trends:global capstonedemo
+
+# Last seen timestamp (epoch seconds)
+redis-cli -h 10.0.0.37 -n 0 ZSCORE trends:lastSeen capstonedemo
+
+# Last count written by anomaly service
+redis-cli -h 10.0.0.37 -n 0 HGET trends:last_counts capstonedemo
+
+# Last emitted z-score (if any)
+redis-cli -h 10.0.0.37 -n 0 GET anomaly:last_emitted_z:capstonedemo
+
+# Doc frequency (if used)
+redis-cli -h 10.0.0.37 -n 0 GET trends:df:capstonedemo
+
+For all first step:
+./mvnw clean package spring-boot:repackage -DskipTests
+
+Check which apps are running:
+ps aux | grep SNAPSHOT.jar
+
+and then for
+Anomaly:
+nohup java -jar target/pulse-anomaly-service-0.0.1-SNAPSHOT.jar   --spring.profiles.active=redis-pipeline   --spring.data.redis.host=10.0.0.37 --spring.data.redis.port=6379   > ~/anomaly.log 2>&1 &
+
+processing:
+
+nohup java -jar ~/Pulse/backend/pulse-processing-service/target/pulse-processing-service-0.0.1-SNAPSHOT.jar   --spring.profiles.active=redis-pipeline   --spring.data.redis.host=10.0.0.37   --pulse.processing.df-max-ratio=1.0   > ~/processing.log 2>&1 &
+
+API service:
+nohup java -jar ~/Pulse/backend/pulse-api-service/target/pulse-api-service-0.0.1-SNAPSHOT.jar \
+  --spring.profiles.active=redis-pipeline \
+  --spring.data.redis.host=10.0.0.37 \
+  --spring.data.redis.port=6379 \
+  --server.port=8086 \
+  > ~/api.log 2>&1 &
+
+
+manual spike script run:
+
+python spike_redis.py --keyword capstonetest --pulses 15 --posts-per-pulse 5 --spike-posts 500 --show-z
 
 END
