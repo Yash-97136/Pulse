@@ -56,30 +56,21 @@ public class TrendsService {
 
     Long activeKeywords = null;
     try {
-      // Target semantics: keywords active in the last windowMinutes (default 60m)
+      // Always use Redis lastSeen ZSET for active keywords in the last 60 minutes
       long windowMinutes = 60;
       long windowStartMillis = Instant.now().minus(Duration.ofMinutes(windowMinutes)).toEpochMilli();
-
       if (activityZsetKey != null && !activityZsetKey.isBlank()) {
         // activityZsetKey stores lastSeenAt (epoch millis) as the score
         // Use ZCOUNT [windowStart, +inf]. Keep zero if there are none.
-        Long count = redis.opsForZSet().count(activityZsetKey, (double) windowStartMillis, Double.POSITIVE_INFINITY);
-        if (count != null) activeKeywords = count; // accept 0 as a valid value
+        activeKeywords = redis.opsForZSet().count(activityZsetKey, (double) windowStartMillis, Double.POSITIVE_INFINITY);
       }
-
-      // Fallbacks only if Redis not available or activity key missing
-      if (activeKeywords == null) activeKeywords = (long) metrics.size();
-      if (activeKeywords == null) activeKeywords = zcard;
+      // If Redis is unavailable or activity key missing, activeKeywords remains null
     } catch (Exception ignored) {}
 
     int nextOffset = offset + metrics.size();
     boolean hasMore = zcard != null && nextOffset < zcard;
 
-    // Safety: if global zset is empty (e.g., after a reset) but activity zset still has entries,
-    // cap activeKeywords by total tracked keywords to avoid inconsistent KPIs.
-    if (zcard != null && activeKeywords != null) {
-      activeKeywords = Math.min(activeKeywords, zcard);
-    }
+    // No fallback: activeKeywords is strictly the count from Redis lastSeen ZSET, or null if unavailable.
 
     return new TrendsResponse(
         metrics,

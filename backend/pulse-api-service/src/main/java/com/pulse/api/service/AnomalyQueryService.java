@@ -27,8 +27,8 @@ public class AnomalyQueryService {
 
   public AnomaliesResponse latest(int page, int limit, String keyword, Double minZ, Instant since) {
     if (repo == null) {
-      // Fallback when database/JPA isn't configured
-      return trends.stubAnomalies(Math.max(1, Math.min(limit, 200)));
+      // If DB/JPA isn't configured, return 0 for anomaliesToday and empty list (never a stub)
+      return new AnomaliesResponse(List.of(), new AnomaliesResponse.Meta(0, 60));
     }
 
     int size = Math.max(1, Math.min(limit, 200));
@@ -50,9 +50,11 @@ public class AnomalyQueryService {
         row.getDetectedAt()
     )).toList();
 
-    // Accurate anomaliesToday: count from midnight UTC to now
-    Instant startOfDay = LocalDate.now(ZoneOffset.UTC).atStartOfDay().toInstant(ZoneOffset.UTC);
-    long todayCount = repo.countByDetectedAtBetween(startOfDay, Instant.now());
+    // Robust UTC-based anomaliesToday count
+    Instant nowUtc = Instant.now();
+    Instant startOfDayUtc = LocalDate.now(ZoneOffset.UTC).atStartOfDay().toInstant(ZoneOffset.UTC);
+    long todayCount = repo.countByDetectedAtBetween(startOfDayUtc, nowUtc);
+    // Optionally: log.debug("Counting anomalies from {} to {}: {}", startOfDayUtc, nowUtc, todayCount);
     return new AnomaliesResponse(events, new AnomaliesResponse.Meta((int) todayCount, 60));
   }
 
